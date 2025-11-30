@@ -53,6 +53,13 @@ class S3Client {
         return kSigning
     }
     
+    // RFC 3986 compliant percent encoding for AWS Signature V4
+    private func percentEncode(_ string: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-_.~")
+        return string.addingPercentEncoding(withAllowedCharacters: allowed) ?? string
+    }
+    
     private func signRequest(method: String, uri: String, queryParams: [String: String] = [:], headers: [String: String], payload: Data = Data()) -> [String: String] {
         let now = Date()
         let dateFormatter = DateFormatter()
@@ -75,7 +82,7 @@ class S3Client {
         let canonicalHeaders = sortedHeaders.map { "\($0.key.lowercased()):\($0.value.trimmingCharacters(in: .whitespaces))" }.joined(separator: "\n") + "\n"
         
         let sortedQueryParams = queryParams.sorted { $0.key < $1.key }
-        let canonicalQueryString = sortedQueryParams.map { "\($0.key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }.joined(separator: "&")
+        let canonicalQueryString = sortedQueryParams.map { "\(percentEncode($0.key))=\(percentEncode($0.value))" }.joined(separator: "&")
         
         let payloadHash = sha256Hash(payload)
         
@@ -124,7 +131,9 @@ class S3Client {
         
         let signedHeaders = signRequest(method: "GET", uri: uri, queryParams: queryParams, headers: headers)
         
-        let queryString = queryParams.map { "\($0.key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }.joined(separator: "&")
+        // Use the same encoding for the actual query string as we used in the canonical request
+        let sortedQueryParams = queryParams.sorted { $0.key < $1.key }
+        let queryString = sortedQueryParams.map { "\(percentEncode($0.key))=\(percentEncode($0.value))" }.joined(separator: "&")
         
         guard let url = URL(string: "\(baseURL)\(uri)?\(queryString)") else {
             throw S3Error.invalidURL

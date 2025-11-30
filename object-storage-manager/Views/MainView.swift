@@ -315,7 +315,7 @@ struct MainView: View {
                                     .foregroundColor(.secondary)
                                 
                                 Button(action: {
-                                    let path = breadcrumbItems[0...index].joined(separator: "/")
+                                    let path = breadcrumbItems[0...index].joined(separator: "/") + "/"
                                     Task {
                                         await storageManager.navigateToFolder(path)
                                     }

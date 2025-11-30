@@ -103,7 +103,8 @@ class StorageManager: ObservableObject {
             if let slashIndex = relativePath.firstIndex(of: "/") {
                 // It's in a subfolder
                 let folderName = String(relativePath[..<slashIndex])
-                let folderPath = normalizedPath + folderName
+                // Ensure the folder path includes a trailing slash for proper S3 prefix handling
+                let folderPath = normalizedPath + folderName + "/"
                 
                 if var folderInfo = folderMap[folderPath] {
                     folderInfo.fileCount += 1
