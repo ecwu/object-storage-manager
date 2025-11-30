@@ -99,6 +99,12 @@ class StorageManager: ObservableObject {
             guard key.hasPrefix(normalizedPath) else { continue }
             let relativePath = String(key.dropFirst(normalizedPath.count))
             
+            // Skip folder marker objects (keys ending with / and typically 0 bytes)
+            // These are metadata objects created by some S3 clients to represent empty folders
+            if relativePath.hasSuffix("/") {
+                continue
+            }
+            
             // Check if this file is in a subdirectory
             if let slashIndex = relativePath.firstIndex(of: "/") {
                 // It's in a subfolder
