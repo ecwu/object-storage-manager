@@ -9,17 +9,27 @@ import Foundation
 import CryptoKit
 
 class S3Client {
-    private let account: StorageAccount
+    private let source: StorageSource
+    private let credentials: StorageCredentials
     private let session: URLSession
     
-    init(account: StorageAccount) {
-        self.account = account
+    init(source: StorageSource, credentials: StorageCredentials) {
+        self.source = source
+        self.credentials = credentials
         self.session = URLSession.shared
     }
     
     private var baseURL: String {
-        let scheme = account.useSSL ? "https" : "http"
-        return "\(scheme)://\(account.endpoint)"
+        let scheme = source.useSSL ? "https" : "http"
+        return "\(scheme)://\(host)"
+    }
+    
+    private var host: String {
+        source.pathStyleEnabled ? source.endpoint : "\(source.bucket).\(source.endpoint)"
+    }
+    
+    private var bucketPrefix: String {
+        source.pathStyleEnabled ? "/\(source.bucket)" : ""
     }
     
     // MARK: - AWS Signature V4
@@ -36,7 +46,7 @@ class S3Client {
     }
     
     private func getSignatureKey(dateStamp: String, regionName: String, serviceName: String) -> Data {
-        let kDate = hmacSHA256(key: Data("AWS4\(account.secretKey)".utf8), data: Data(dateStamp.utf8))
+        let kDate = hmacSHA256(key: Data("AWS4\(credentials.secretKey)".utf8), data: Data(dateStamp.utf8))
         let kRegion = hmacSHA256(key: kDate, data: Data(regionName.utf8))
         let kService = hmacSHA256(key: kRegion, data: Data(serviceName.utf8))
         let kSigning = hmacSHA256(key: kService, data: Data("aws4_request".utf8))
@@ -53,7 +63,7 @@ class S3Client {
         dateFormatter.dateFormat = "yyyyMMdd"
         let dateStamp = dateFormatter.string(from: now)
         
-        let region = account.region.isEmpty ? "us-east-1" : account.region
+        let region = source.region.isEmpty ? "us-east-1" : source.region
         let service = "s3"
         
         var allHeaders = headers
@@ -90,7 +100,7 @@ class S3Client {
         let signature = hmacSHA256(key: signingKey, data: Data(stringToSign.utf8))
         let signatureHex = signature.map { String(format: "%02x", $0) }.joined()
         
-        let authorization = "AWS4-HMAC-SHA256 Credential=\(account.accessKey)/\(credentialScope), SignedHeaders=\(signedHeaders), Signature=\(signatureHex)"
+        let authorization = "AWS4-HMAC-SHA256 Credential=\(credentials.accessKey)/\(credentialScope), SignedHeaders=\(signedHeaders), Signature=\(signatureHex)"
         
         var resultHeaders = allHeaders
         resultHeaders["Authorization"] = authorization
@@ -101,7 +111,7 @@ class S3Client {
     // MARK: - API Methods
     
     func listObjects(prefix: String = "", maxKeys: Int = 1000) async throws -> [MediaFile] {
-        let uri = "/\(account.bucket)"
+        let uri = bucketPrefix.isEmpty ? "/" : bucketPrefix
         var queryParams: [String: String] = [
             "list-type": "2",
             "max-keys": "\(maxKeys)"
@@ -110,7 +120,6 @@ class S3Client {
             queryParams["prefix"] = prefix
         }
         
-        let host = account.endpoint
         let headers: [String: String] = ["Host": host]
         
         let signedHeaders = signRequest(method: "GET", uri: uri, queryParams: queryParams, headers: headers)
@@ -232,12 +241,11 @@ class S3Client {
     
     func getObjectURL(key: String) -> URL? {
         let encodedKey = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
-        return URL(string: "\(baseURL)/\(account.bucket)/\(encodedKey)")
+        return URL(string: "\(baseURL)\(bucketPrefix)/\(encodedKey)")
     }
     
     func uploadObject(key: String, data: Data, contentType: String) async throws {
-        let uri = "/\(account.bucket)/\(key)"
-        let host = account.endpoint
+        let uri = "\(bucketPrefix)/\(key)"
         
         let headers: [String: String] = [
             "Host": host,
@@ -272,8 +280,7 @@ class S3Client {
     
     func deleteObject(key: String) async throws {
         let encodedKey = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
-        let uri = "/\(account.bucket)/\(encodedKey)"
-        let host = account.endpoint
+        let uri = "\(bucketPrefix)/\(encodedKey)"
         
         let headers: [String: String] = ["Host": host]
         let signedHeaders = signRequest(method: "DELETE", uri: uri, headers: headers)

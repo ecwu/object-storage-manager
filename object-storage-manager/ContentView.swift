@@ -30,5 +30,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: StorageAccount.self, inMemory: true)
+        .modelContainer(for: [StorageSource.self, Tag.self], inMemory: true)
 }

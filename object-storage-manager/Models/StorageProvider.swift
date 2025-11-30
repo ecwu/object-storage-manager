@@ -35,12 +35,11 @@ enum StorageProviderType: String, Codable, CaseIterable {
         }
     }
     
-    /// Normalizes the endpoint format for the provider
-    /// For Qiniu: converts "s3.region.qiniucs.com" to "s3-region.qiniucs.com"
+    /// Normalizes the endpoint format for the provider.
+    /// For Qiniu: converts "s3.region.qiniucs.com" to "s3-region.qiniucs.com".
     func normalizeEndpoint(_ endpoint: String) -> String {
         switch self {
         case .qiniu:
-            // Fix Qiniu endpoint format: s3.region.qiniucs.com -> s3-region.qiniucs.com
             if endpoint.hasPrefix("s3.") && endpoint.hasSuffix(".qiniucs.com") {
                 return endpoint.replacingOccurrences(of: "s3.", with: "s3-", options: [], range: endpoint.startIndex..<endpoint.index(endpoint.startIndex, offsetBy: 3))
             }
@@ -52,18 +51,35 @@ enum StorageProviderType: String, Codable, CaseIterable {
 }
 
 @Model
-final class StorageAccount {
+final class Tag {
+    var id: UUID
+    var name: String
+    @Relationship(inverse: \StorageSource.tags) var sources: [StorageSource] = []
+    
+    init(name: String) {
+        self.id = UUID()
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+@Model
+final class StorageSource {
     var id: UUID
     var name: String
     var providerTypeRaw: String
     var endpoint: String
-    var accessKey: String
-    var secretKey: String
     var bucket: String
     var region: String
     var useSSL: Bool
+    var pathStyleEnabled: Bool
+    var note: String?
     var createdAt: Date
-    var tags: [String]
+    var lastUsedAt: Date?
+    var lastCheck: Date?
+    var lastError: String?
+    var credentialsRef: String
+    
+    @Relationship var tags: [Tag] = []
     
     var providerType: StorageProviderType {
         get { StorageProviderType(rawValue: providerTypeRaw) ?? .s3 }
@@ -71,26 +87,36 @@ final class StorageAccount {
     }
     
     init(
+        id: UUID = UUID(),
         name: String,
         providerType: StorageProviderType,
         endpoint: String,
-        accessKey: String,
-        secretKey: String,
         bucket: String,
         region: String = "",
         useSSL: Bool = true,
-        tags: [String] = []
+        pathStyleEnabled: Bool = false,
+        note: String? = nil,
+        createdAt: Date = Date(),
+        lastUsedAt: Date? = nil,
+        lastCheck: Date? = nil,
+        lastError: String? = nil,
+        credentialsRef: String,
+        tags: [Tag] = []
     ) {
-        self.id = UUID()
+        self.id = id
         self.name = name
         self.providerTypeRaw = providerType.rawValue
         self.endpoint = endpoint
-        self.accessKey = accessKey
-        self.secretKey = secretKey
         self.bucket = bucket
         self.region = region
         self.useSSL = useSSL
-        self.createdAt = Date()
+        self.pathStyleEnabled = pathStyleEnabled
+        self.note = note
+        self.createdAt = createdAt
+        self.lastUsedAt = lastUsedAt
+        self.lastCheck = lastCheck
+        self.lastError = lastError
+        self.credentialsRef = credentialsRef
         self.tags = tags
     }
 }

@@ -5,6 +5,7 @@
 //  Created by Zhenghao Wu on 2025/11/28.
 //
 
+import Foundation
 import SwiftUI
 import SwiftData
 
@@ -12,7 +13,8 @@ import SwiftData
 struct object_storage_managerApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            StorageAccount.self,
+            StorageSource.self,
+            Tag.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

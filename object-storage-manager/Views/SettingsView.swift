@@ -11,25 +11,25 @@ import SwiftData
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \StorageAccount.createdAt, order: .reverse) private var accounts: [StorageAccount]
+    @Query(sort: \StorageSource.createdAt, order: .reverse) private var sources: [StorageSource]
     
-    @State private var showingAddAccount = false
-    @State private var selectedAccount: StorageAccount?
+    @State private var showingAddSource = false
+    @State private var selectedSource: StorageSource?
     @State private var showingDeleteConfirmation = false
-    @State private var accountToDelete: StorageAccount?
+    @State private var sourceToDelete: StorageSource?
     
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Text("Storage Buckets")
+                Text("Storage Sources")
                     .font(.title2)
                     .fontWeight(.semibold)
                 
                 Spacer()
                 
-                Button(action: { showingAddAccount = true }) {
-                    Label("Add Bucket", systemImage: "plus")
+                Button(action: { showingAddSource = true }) {
+                    Label("Add Source", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 
@@ -46,102 +46,105 @@ struct SettingsView: View {
             
             Divider()
             
-            // Bucket List
-            if accounts.isEmpty {
+            // Source List
+            if sources.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "externaldrive.badge.plus")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
                     
-                    Text("No Storage Buckets")
+                    Text("No Storage Sources")
                         .font(.headline)
                     
                     Text("Add a storage bucket to get started")
                         .foregroundColor(.secondary)
                     
-                    Button("Add Bucket") {
-                        showingAddAccount = true
+                    Button("Add Source") {
+                        showingAddSource = true
                     }
                     .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
-                    ForEach(accounts) { account in
-                        AccountRowView(account: account)
+                    ForEach(sources) { source in
+                        SourceRowView(source: source)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedAccount = account
+                                selectedSource = source
                             }
                             .contextMenu {
                                 Button("Edit") {
-                                    selectedAccount = account
+                                    selectedSource = source
                                 }
                                 
                                 Divider()
                                 
                                 Button("Delete", role: .destructive) {
-                                    accountToDelete = account
+                                    sourceToDelete = source
                                     showingDeleteConfirmation = true
                                 }
                             }
                     }
-                    .onDelete(perform: deleteAccounts)
+                    .onDelete(perform: deleteSources)
                 }
             }
         }
-        .sheet(isPresented: $showingAddAccount) {
-            AccountFormView(mode: .add)
+        .sheet(isPresented: $showingAddSource) {
+            SourceFormView(mode: .add)
         }
-        .sheet(item: $selectedAccount) { account in
-            AccountFormView(mode: .edit(account))
+        .sheet(item: $selectedSource) { source in
+            SourceFormView(mode: .edit(source))
         }
-        .alert("Delete Bucket", isPresented: $showingDeleteConfirmation) {
+        .alert("Delete Source", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                if let account = accountToDelete {
-                    deleteAccount(account)
+                if let source = sourceToDelete {
+                    deleteSource(source)
                 }
             }
         } message: {
-            Text("Are you sure you want to delete this bucket? This action cannot be undone.")
+            Text("Are you sure you want to delete this source? This action cannot be undone.")
         }
     }
     
-    private func deleteAccounts(offsets: IndexSet) {
+    private func deleteSources(offsets: IndexSet) {
         withAnimation {
             for index in offsets {
-                modelContext.delete(accounts[index])
+                let source = sources[index]
+                CredentialsStore().delete(for: source.credentialsRef)
+                modelContext.delete(source)
             }
         }
     }
     
-    private func deleteAccount(_ account: StorageAccount) {
+    private func deleteSource(_ source: StorageSource) {
         withAnimation {
-            modelContext.delete(account)
+            CredentialsStore().delete(for: source.credentialsRef)
+            modelContext.delete(source)
         }
     }
 }
 
-struct AccountRowView: View {
-    let account: StorageAccount
+struct SourceRowView: View {
+    let source: StorageSource
     
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: account.providerType.iconName)
+            Image(systemName: source.providerType.iconName)
                 .font(.title2)
                 .foregroundColor(.accentColor)
                 .frame(width: 32)
             
             VStack(alignment: .leading, spacing: 4) {
-                Text(account.name)
+                Text(source.name)
                     .font(.headline)
                 
-                Text(account.providerType.rawValue)
+                Text(source.providerType.rawValue)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
-                Text(account.endpoint)
+                Text(source.endpoint)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -149,20 +152,20 @@ struct AccountRowView: View {
             Spacer()
             
             VStack(alignment: .trailing, spacing: 4) {
-                Text(account.bucket)
+                Text(source.bucket)
                     .font(.subheadline)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.1))
                     .cornerRadius(4)
                 
-                if !account.tags.isEmpty {
+                if !source.tags.isEmpty {
                     HStack(spacing: 4) {
-                        ForEach(account.tags.prefix(3), id: \.self) { tag in
-                            TagChip(tag: tag, showDelete: false)
+                        ForEach(source.tags.prefix(3)) { tag in
+                            TagChip(tag: tag.name, showDelete: false)
                         }
-                        if account.tags.count > 3 {
-                            Text("+\(account.tags.count - 3)")
+                        if source.tags.count > 3 {
+                            Text("+\(source.tags.count - 3)")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
@@ -174,23 +177,24 @@ struct AccountRowView: View {
     }
 }
 
-enum AccountFormMode: Identifiable {
+enum SourceFormMode: Identifiable {
     case add
-    case edit(StorageAccount)
+    case edit(StorageSource)
     
     var id: String {
         switch self {
         case .add: return "add"
-        case .edit(let account): return account.id.uuidString
+        case .edit(let source): return source.id.uuidString
         }
     }
 }
 
-struct AccountFormView: View {
+struct SourceFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     
-    let mode: AccountFormMode
+    let mode: SourceFormMode
+    private let credentialsStore = CredentialsStore()
     
     @State private var name: String = ""
     @State private var providerType: StorageProviderType = .s3
@@ -201,6 +205,8 @@ struct AccountFormView: View {
     @State private var region: String = ""
     @State private var useSSL: Bool = true
     @State private var tags: [String] = []
+    @State private var pathStyleEnabled: Bool = false
+    @State private var note: String = ""
     
     @State private var isTesting = false
     @State private var testResult: TestResult?
@@ -215,8 +221,8 @@ struct AccountFormView: View {
         return false
     }
     
-    private var existingAccount: StorageAccount? {
-        if case .edit(let account) = mode { return account }
+    private var existingSource: StorageSource? {
+        if case .edit(let source) = mode { return source }
         return nil
     }
     
@@ -231,13 +237,13 @@ struct AccountFormView: View {
                 
                 Spacer()
                 
-                Text(isEditing ? "Edit Bucket" : "Add Bucket")
+                Text(isEditing ? "Edit Source" : "Add Source")
                     .font(.headline)
                 
                 Spacer()
                 
                 Button("Save") {
-                    saveAccount()
+                    saveSource()
                     DispatchQueue.main.async {
                         dismiss()
                     }
@@ -251,8 +257,9 @@ struct AccountFormView: View {
             
             // Form
             Form {
-                Section("Bucket Info") {
-                    TextField("Bucket Name", text: $name)
+                Section("Source Info") {
+                    TextField("Source Name", text: $name)
+                    TextField("Bucket", text: $bucket)
                     
                     Picker("Provider", selection: $providerType) {
                         ForEach(StorageProviderType.allCases, id: \.self) { type in
@@ -274,14 +281,16 @@ struct AccountFormView: View {
                     TextField("Region (optional)", text: $region)
                     
                     Toggle("Use SSL (HTTPS)", isOn: $useSSL)
+                    Toggle("Path-style requests", isOn: $pathStyleEnabled)
+                    
+                    TextField("Note (optional)", text: $note, axis: .vertical)
+                        .lineLimit(1...3)
                 }
                 
                 Section("Credentials") {
                     TextField("Access Key", text: $accessKey)
                     
                     SecureField("Secret Key", text: $secretKey)
-                    
-                    TextField("Bucket", text: $bucket)
                 }
                 
                 Section("Tags") {
@@ -324,16 +333,21 @@ struct AccountFormView: View {
         }
         .frame(width: 500, height: 550)
         .onAppear {
-            if let account = existingAccount {
-                name = account.name
-                providerType = account.providerType
-                endpoint = account.endpoint
-                accessKey = account.accessKey
-                secretKey = account.secretKey
-                bucket = account.bucket
-                region = account.region
-                useSSL = account.useSSL
-                tags = account.tags
+            if let source = existingSource {
+                name = source.name
+                providerType = source.providerType
+                endpoint = source.endpoint
+                bucket = source.bucket
+                region = source.region
+                useSSL = source.useSSL
+                pathStyleEnabled = source.pathStyleEnabled
+                note = source.note ?? ""
+                tags = source.tags.map { $0.name }
+                
+                if let creds = try? credentialsStore.load(for: source.credentialsRef) {
+                    accessKey = creds.accessKey
+                    secretKey = creds.secretKey
+                }
             } else {
                 endpoint = providerType.defaultEndpoint
             }
@@ -344,18 +358,19 @@ struct AccountFormView: View {
         isTesting = true
         testResult = nil
         
-        let testAccount = StorageAccount(
+        let source = StorageSource(
             name: name,
             providerType: providerType,
             endpoint: endpoint,
-            accessKey: accessKey,
-            secretKey: secretKey,
             bucket: bucket,
             region: region,
-            useSSL: useSSL
+            useSSL: useSSL,
+            pathStyleEnabled: pathStyleEnabled,
+            credentialsRef: UUID().uuidString
         )
         
-        let client = S3Client(account: testAccount)
+        let credentials = StorageCredentials(accessKey: accessKey, secretKey: secretKey)
+        let client = S3Client(source: source, credentials: credentials)
         
         Task {
             do {
@@ -373,37 +388,66 @@ struct AccountFormView: View {
         }
     }
     
-    private func saveAccount() {
+    private func saveSource() {
         // Normalize endpoint format for the selected provider
         let normalizedEndpoint = providerType.normalizeEndpoint(endpoint)
-        
-        if let account = existingAccount {
-            account.name = name
-            account.providerType = providerType
-            account.endpoint = normalizedEndpoint
-            account.accessKey = accessKey
-            account.secretKey = secretKey
-            account.bucket = bucket
-            account.region = region
-            account.useSSL = useSSL
-            account.tags = tags
+        let resolvedTags = resolveTags(tags)
+        let credentials = StorageCredentials(accessKey: accessKey, secretKey: secretKey)
+
+        if let source = existingSource {
+            source.name = name
+            source.providerType = providerType
+            source.endpoint = normalizedEndpoint
+            source.bucket = bucket
+            source.region = region
+            source.useSSL = useSSL
+            source.pathStyleEnabled = pathStyleEnabled
+            source.note = note.isEmpty ? nil : note
+            source.tags = resolvedTags
+            if source.lastUsedAt == nil { source.lastUsedAt = Date() }
+            try? credentialsStore.save(credentials: credentials, for: source.credentialsRef)
         } else {
-            let newAccount = StorageAccount(
+            let newId = UUID()
+            let credentialsRef = newId.uuidString
+            let newSource = StorageSource(
+                id: newId,
                 name: name,
                 providerType: providerType,
                 endpoint: normalizedEndpoint,
-                accessKey: accessKey,
-                secretKey: secretKey,
                 bucket: bucket,
                 region: region,
                 useSSL: useSSL,
-                tags: tags
+                pathStyleEnabled: pathStyleEnabled,
+                note: note.isEmpty ? nil : note,
+                createdAt: Date(),
+                lastUsedAt: Date(),
+                credentialsRef: credentialsRef,
+                tags: resolvedTags
             )
-            modelContext.insert(newAccount)
+            modelContext.insert(newSource)
+            try? credentialsStore.save(credentials: credentials, for: credentialsRef)
         }
+    }
+    
+    private func resolveTags(_ names: [String]) -> [Tag] {
+        let trimmed = names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        var results: [Tag] = []
+        
+        for name in trimmed {
+            let descriptor = FetchDescriptor<Tag>(predicate: #Predicate { $0.name == name })
+            if let existing = try? modelContext.fetch(descriptor).first {
+                results.append(existing)
+            } else {
+                let newTag = Tag(name: name)
+                modelContext.insert(newTag)
+                results.append(newTag)
+            }
+        }
+        return results
     }
 }
 
 #Preview {
     SettingsView()
+        .modelContainer(for: [StorageSource.self, Tag.self], inMemory: true)
 }

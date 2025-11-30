@@ -11,17 +11,21 @@ import UniformTypeIdentifiers
 
 struct MainView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \StorageAccount.createdAt, order: .reverse) private var buckets: [StorageAccount]
+    @Query(sort: \StorageSource.createdAt, order: .reverse) private var sources: [StorageSource]
     
     @StateObject private var storageManager = StorageManager()
     
-    @State private var selectedBucket: StorageAccount?
+    @State private var selectedSource: StorageSource?
     @State private var searchText = ""
     @State private var selectedFile: MediaFile?
     @State private var showingUploadSheet = false
+    @State private var showingUploadWithPathSheet = false
+    @State private var showingPathDialog = false
+    @State private var destinationPath = ""
+    @State private var pendingUploadURLs: [URL] = []
     @State private var viewMode: ViewMode = .grid
     @State private var filterType: FilterType = .all
-    @State private var selectedBucketTag: String?
+    @State private var selectedSourceTag: String?
     
     enum ViewMode: String, CaseIterable {
         case grid = "Grid"
@@ -43,17 +47,19 @@ struct MainView: View {
         case other = "Other"
     }
     
-    private var filteredBuckets: [StorageAccount] {
-        if let tag = selectedBucketTag {
-            return buckets.filter { $0.tags.contains(tag) }
+    private var filteredSources: [StorageSource] {
+        if let tag = selectedSourceTag {
+            return sources.filter { source in
+                source.tags.contains { $0.name.caseInsensitiveCompare(tag) == .orderedSame }
+            }
         }
-        return buckets
+        return sources
     }
     
-    private var allBucketTags: [String] {
+    private var allSourceTags: [String] {
         var tagSet = Set<String>()
-        for bucket in buckets {
-            tagSet.formUnion(bucket.tags)
+        for source in sources {
+            source.tags.forEach { tagSet.insert($0.name) }
         }
         return Array(tagSet).sorted()
     }
@@ -85,11 +91,11 @@ struct MainView: View {
     
     var body: some View {
         HSplitView {
-            // Sidebar - Bucket List
+            // Sidebar - Source List
             VStack(spacing: 0) {
-                // Bucket selector header
+                // Source selector header
                 HStack {
-                    Text("Buckets")
+                    Text("Sources")
                         .font(.headline)
                     Spacer()
                 }
@@ -99,30 +105,30 @@ struct MainView: View {
                 
                 Divider()
                 
-                // Tag filter for buckets
-                if !allBucketTags.isEmpty {
+                // Tag filter for sources
+                if !allSourceTags.isEmpty {
                     VStack(spacing: 0) {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
-                                Button(action: { selectedBucketTag = nil }) {
+                                Button(action: { selectedSourceTag = nil }) {
                                     Text("All")
                                         .font(.caption)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(selectedBucketTag == nil ? Color.accentColor : Color.gray.opacity(0.2))
-                                        .foregroundColor(selectedBucketTag == nil ? .white : .primary)
+                                        .background(selectedSourceTag == nil ? Color.accentColor : Color.gray.opacity(0.2))
+                                        .foregroundColor(selectedSourceTag == nil ? .white : .primary)
                                         .cornerRadius(4)
                                 }
                                 .buttonStyle(.plain)
                                 
-                                ForEach(allBucketTags, id: \.self) { tag in
-                                    Button(action: { selectedBucketTag = tag }) {
+                                ForEach(allSourceTags, id: \.self) { tag in
+                                    Button(action: { selectedSourceTag = tag }) {
                                         Text(tag)
                                             .font(.caption)
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 4)
-                                            .background(selectedBucketTag == tag ? Color.accentColor : Color.gray.opacity(0.2))
-                                            .foregroundColor(selectedBucketTag == tag ? .white : .primary)
+                                            .background(selectedSourceTag == tag ? Color.accentColor : Color.gray.opacity(0.2))
+                                            .foregroundColor(selectedSourceTag == tag ? .white : .primary)
                                             .cornerRadius(4)
                                     }
                                     .buttonStyle(.plain)
@@ -136,12 +142,12 @@ struct MainView: View {
                     }
                 }
                 
-                if buckets.isEmpty {
+                if sources.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "externaldrive.badge.plus")
                             .font(.largeTitle)
                             .foregroundColor(.secondary)
-                        Text("No buckets configured")
+                        Text("No sources configured")
                             .foregroundColor(.secondary)
                         Text("Go to Settings to add one")
                             .font(.caption)
@@ -149,35 +155,35 @@ struct MainView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(filteredBuckets, selection: $selectedBucket) { bucket in
+                    List(filteredSources, selection: $selectedSource) { source in
                         HStack(spacing: 10) {
-                            Image(systemName: bucket.providerType.iconName)
+                            Image(systemName: source.providerType.iconName)
                                 .foregroundColor(.accentColor)
                             
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(bucket.name)
+                                Text(source.name)
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                Text(bucket.bucket)
+                                Text(source.bucket)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
                             
                             Spacer()
                             
-                            if storageManager.currentAccount?.id == bucket.id && storageManager.isConnected {
+                            if storageManager.currentSource?.id == source.id && storageManager.isConnected {
                                 Circle()
                                     .fill(.green)
                                     .frame(width: 8, height: 8)
                             }
                         }
                         .padding(.vertical, 4)
-                        .tag(bucket)
+                        .tag(source)
                     }
-                    .onChange(of: selectedBucket) { _, newBucket in
-                        if let bucket = newBucket {
+                    .onChange(of: selectedSource) { _, newSource in
+                        if let source = newSource {
                             Task {
-                                await storageManager.connect(to: bucket)
+                                await storageManager.connect(to: source)
                             }
                         }
                     }
@@ -252,10 +258,19 @@ struct MainView: View {
                     .disabled(!storageManager.isConnected || storageManager.isLoading)
                     .help("Refresh files")
                     
-                    // Upload button
-                    Button(action: { showingUploadSheet = true }) {
+                    // Upload button with menu
+                    Menu {
+                        Button(action: { showingUploadSheet = true }) {
+                            Label("Simple Upload", systemImage: "arrow.up.doc")
+                        }
+                        
+                        Button(action: { showingUploadWithPathSheet = true }) {
+                            Label("Upload with Path", systemImage: "arrow.up.doc.on.clipboard")
+                        }
+                    } label: {
                         Label("Upload", systemImage: "arrow.up.circle")
                     }
+                    .menuStyle(.borderlessButton)
                     .buttonStyle(.borderedProminent)
                     .disabled(!storageManager.isConnected)
                 }
@@ -274,11 +289,11 @@ struct MainView: View {
                                 .font(.system(size: 48))
                                 .foregroundColor(.secondary)
                             
-                            Text("Select a bucket to connect")
+                            Text("Select a source to connect")
                                 .font(.headline)
                             
-                            if buckets.isEmpty {
-                                Text("Add buckets in Settings first")
+                            if sources.isEmpty {
+                                Text("Add sources in Settings first")
                                     .foregroundColor(.secondary)
                             }
                         }
@@ -366,7 +381,7 @@ struct MainView: View {
                             Circle()
                                 .fill(.green)
                                 .frame(width: 7, height: 7)
-                            Text("\(storageManager.currentAccount?.name ?? "")")
+                            Text("\(storageManager.currentSource?.name ?? "")")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
@@ -408,16 +423,64 @@ struct MainView: View {
             switch result {
             case .success(let urls):
                 Task {
+                    // Simple upload - no path
+                    var accessedURLs: [URL] = []
                     for url in urls {
                         if url.startAccessingSecurityScopedResource() {
-                            await storageManager.uploadFile(url: url)
-                            url.stopAccessingSecurityScopedResource()
+                            accessedURLs.append(url)
                         }
+                    }
+                    
+                    await storageManager.uploadFiles(urls: accessedURLs, destinationPath: "")
+                    
+                    for url in accessedURLs {
+                        url.stopAccessingSecurityScopedResource()
                     }
                 }
             case .failure(let error):
                 print("File import error: \(error.localizedDescription)")
             }
+        }
+        .fileImporter(
+            isPresented: $showingUploadWithPathSheet,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                // Store selected files and show path dialog
+                pendingUploadURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
+                destinationPath = ""
+                showingPathDialog = true
+            case .failure(let error):
+                print("File import error: \(error.localizedDescription)")
+            }
+        }
+        .sheet(isPresented: $showingPathDialog) {
+            UploadPathDialog(
+                fileCount: pendingUploadURLs.count,
+                destinationPath: $destinationPath,
+                onUpload: {
+                    Task {
+                        await storageManager.uploadFiles(urls: pendingUploadURLs, destinationPath: destinationPath)
+                        
+                        // Clean up security-scoped resources
+                        for url in pendingUploadURLs {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                        pendingUploadURLs = []
+                    }
+                    showingPathDialog = false
+                },
+                onCancel: {
+                    // Clean up security-scoped resources
+                    for url in pendingUploadURLs {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                    pendingUploadURLs = []
+                    showingPathDialog = false
+                }
+            )
         }
     }
     
@@ -441,6 +504,99 @@ struct MainView: View {
                 await storageManager.deleteFile(file)
             }
         }
+    }
+}
+
+// MARK: - Upload Path Dialog
+struct UploadPathDialog: View {
+    let fileCount: Int
+    @Binding var destinationPath: String
+    let onUpload: () -> Void
+    let onCancel: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // Header
+            VStack(spacing: 8) {
+                Image(systemName: "arrow.up.doc.on.clipboard")
+                    .font(.system(size: 48))
+                    .foregroundColor(.accentColor)
+                
+                Text("Upload with Path")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                
+                Text("Uploading \(fileCount) \(fileCount == 1 ? "file" : "files")")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top)
+            
+            // Path input section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Destination Path (Optional)")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Text("Specify a folder path in your bucket. Leave empty to upload to the root.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                
+                TextField("e.g., images/2024 or documents/reports", text: $destinationPath)
+                    .textFieldStyle(.roundedBorder)
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    Text("Slashes will create nested folders")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 4)
+            }
+            
+            // Example preview
+            if !destinationPath.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Preview:")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.fill")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                        Text("\(destinationPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/filename.ext")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(Color.primary)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(6)
+                }
+            }
+            
+            // Action buttons
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Button("Upload") {
+                    onUpload()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.top, 8)
+        }
+        .padding(24)
+        .frame(width: 450)
     }
 }
 
