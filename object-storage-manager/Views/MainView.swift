@@ -21,6 +21,7 @@ struct MainView: View {
     @State private var showingUploadSheet = false
     @State private var viewMode: ViewMode = .grid
     @State private var filterType: FilterType = .all
+    @State private var selectedBucketTag: String?
     
     enum ViewMode: String, CaseIterable {
         case grid = "Grid"
@@ -40,6 +41,21 @@ struct MainView: View {
         case videos = "Videos"
         case audio = "Audio"
         case other = "Other"
+    }
+    
+    private var filteredBuckets: [StorageAccount] {
+        if let tag = selectedBucketTag {
+            return buckets.filter { $0.tags.contains(tag) }
+        }
+        return buckets
+    }
+    
+    private var allBucketTags: [String] {
+        var tagSet = Set<String>()
+        for bucket in buckets {
+            tagSet.formUnion(bucket.tags)
+        }
+        return Array(tagSet).sorted()
     }
     
     private var filteredFiles: [MediaFile] {
@@ -83,6 +99,43 @@ struct MainView: View {
                 
                 Divider()
                 
+                // Tag filter for buckets
+                if !allBucketTags.isEmpty {
+                    VStack(spacing: 0) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                Button(action: { selectedBucketTag = nil }) {
+                                    Text("All")
+                                        .font(.caption)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(selectedBucketTag == nil ? Color.accentColor : Color.gray.opacity(0.2))
+                                        .foregroundColor(selectedBucketTag == nil ? .white : .primary)
+                                        .cornerRadius(4)
+                                }
+                                .buttonStyle(.plain)
+                                
+                                ForEach(allBucketTags, id: \.self) { tag in
+                                    Button(action: { selectedBucketTag = tag }) {
+                                        Text(tag)
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(selectedBucketTag == tag ? Color.accentColor : Color.gray.opacity(0.2))
+                                            .foregroundColor(selectedBucketTag == tag ? .white : .primary)
+                                            .cornerRadius(4)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                        }
+                        .padding(.vertical, 8)
+                        
+                        Divider()
+                    }
+                }
+                
                 if buckets.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "externaldrive.badge.plus")
@@ -96,7 +149,7 @@ struct MainView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(buckets, selection: $selectedBucket) { bucket in
+                    List(filteredBuckets, selection: $selectedBucket) { bucket in
                         HStack(spacing: 10) {
                             Image(systemName: bucket.providerType.iconName)
                                 .foregroundColor(.accentColor)

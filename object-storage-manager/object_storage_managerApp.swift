@@ -19,7 +19,19 @@ struct object_storage_managerApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            // If migration fails, delete the old store and create a new one
+            print("Failed to create ModelContainer, attempting to reset: \(error)")
+            
+            // Get the store URL and delete it
+            let storeURL = modelConfiguration.url
+            try? FileManager.default.removeItem(at: storeURL)
+            
+            // Try again with fresh store
+            do {
+                return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            } catch {
+                fatalError("Could not create ModelContainer even after reset: \(error)")
+            }
         }
     }()
 

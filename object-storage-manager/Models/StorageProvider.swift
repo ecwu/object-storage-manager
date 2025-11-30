@@ -63,6 +63,7 @@ final class StorageAccount {
     var region: String
     var useSSL: Bool
     var createdAt: Date
+    var tags: [String]
     
     var providerType: StorageProviderType {
         get { StorageProviderType(rawValue: providerTypeRaw) ?? .s3 }
@@ -77,7 +78,8 @@ final class StorageAccount {
         secretKey: String,
         bucket: String,
         region: String = "",
-        useSSL: Bool = true
+        useSSL: Bool = true,
+        tags: [String] = []
     ) {
         self.id = UUID()
         self.name = name
@@ -89,5 +91,6 @@ final class StorageAccount {
         self.region = region
         self.useSSL = useSSL
         self.createdAt = Date()
+        self.tags = tags
     }
 }

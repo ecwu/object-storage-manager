@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \StorageAccount.createdAt, order: .reverse) private var accounts: [StorageAccount]
     
@@ -21,36 +22,44 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Text("Storage Accounts")
+                Text("Storage Buckets")
                     .font(.title2)
                     .fontWeight(.semibold)
                 
                 Spacer()
                 
                 Button(action: { showingAddAccount = true }) {
-                    Label("Add Account", systemImage: "plus")
+                    Label("Add Bucket", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
+                
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
             }
             .padding()
             .background(Color(NSColor.windowBackgroundColor))
             
             Divider()
             
-            // Account List
+            // Bucket List
             if accounts.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "externaldrive.badge.plus")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
                     
-                    Text("No Storage Accounts")
+                    Text("No Storage Buckets")
                         .font(.headline)
                     
-                    Text("Add a storage account to get started")
+                    Text("Add a storage bucket to get started")
                         .foregroundColor(.secondary)
                     
-                    Button("Add Account") {
+                    Button("Add Bucket") {
                         showingAddAccount = true
                     }
                     .buttonStyle(.borderedProminent)
@@ -87,7 +96,7 @@ struct SettingsView: View {
         .sheet(item: $selectedAccount) { account in
             AccountFormView(mode: .edit(account))
         }
-        .alert("Delete Account", isPresented: $showingDeleteConfirmation) {
+        .alert("Delete Bucket", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
                 if let account = accountToDelete {
@@ -95,7 +104,7 @@ struct SettingsView: View {
                 }
             }
         } message: {
-            Text("Are you sure you want to delete this account? This action cannot be undone.")
+            Text("Are you sure you want to delete this bucket? This action cannot be undone.")
         }
     }
     
@@ -146,6 +155,19 @@ struct AccountRowView: View {
                     .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.1))
                     .cornerRadius(4)
+                
+                if !account.tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(account.tags.prefix(3), id: \.self) { tag in
+                            TagChip(tag: tag, showDelete: false)
+                        }
+                        if account.tags.count > 3 {
+                            Text("+\(account.tags.count - 3)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
         }
         .padding(.vertical, 8)
@@ -178,6 +200,7 @@ struct AccountFormView: View {
     @State private var bucket: String = ""
     @State private var region: String = ""
     @State private var useSSL: Bool = true
+    @State private var tags: [String] = []
     
     @State private var isTesting = false
     @State private var testResult: TestResult?
@@ -208,7 +231,7 @@ struct AccountFormView: View {
                 
                 Spacer()
                 
-                Text(isEditing ? "Edit Account" : "Add Account")
+                Text(isEditing ? "Edit Bucket" : "Add Bucket")
                     .font(.headline)
                 
                 Spacer()
@@ -228,8 +251,8 @@ struct AccountFormView: View {
             
             // Form
             Form {
-                Section("Account Info") {
-                    TextField("Account Name", text: $name)
+                Section("Bucket Info") {
+                    TextField("Bucket Name", text: $name)
                     
                     Picker("Provider", selection: $providerType) {
                         ForEach(StorageProviderType.allCases, id: \.self) { type in
@@ -259,6 +282,13 @@ struct AccountFormView: View {
                     SecureField("Secret Key", text: $secretKey)
                     
                     TextField("Bucket", text: $bucket)
+                }
+                
+                Section("Tags") {
+                    TagManagementView(
+                        tags: $tags,
+                        suggestedTags: ["Production", "Development", "Testing", "Archive", "Backup", "Media"]
+                    )
                 }
                 
                 Section {
@@ -303,6 +333,7 @@ struct AccountFormView: View {
                 bucket = account.bucket
                 region = account.region
                 useSSL = account.useSSL
+                tags = account.tags
             } else {
                 endpoint = providerType.defaultEndpoint
             }
@@ -355,6 +386,7 @@ struct AccountFormView: View {
             account.bucket = bucket
             account.region = region
             account.useSSL = useSSL
+            account.tags = tags
         } else {
             let newAccount = StorageAccount(
                 name: name,
@@ -364,7 +396,8 @@ struct AccountFormView: View {
                 secretKey: secretKey,
                 bucket: bucket,
                 region: region,
-                useSSL: useSSL
+                useSSL: useSSL,
+                tags: tags
             )
             modelContext.insert(newAccount)
         }
