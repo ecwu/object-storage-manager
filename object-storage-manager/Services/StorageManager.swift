@@ -11,6 +11,8 @@ import Combine
 
 class StorageManager: ObservableObject {
     @Published var files: [MediaFile] = []
+    @Published var items: [FileSystemItem] = []
+    @Published var currentPath: String = ""
     @Published var isLoading = false
     @Published var isConnected = false
     @Published var errorMessage: String?
@@ -55,6 +57,8 @@ class StorageManager: ObservableObject {
         self.currentSource = nil
         self.isConnected = false
         self.files = []
+        self.items = []
+        self.currentPath = ""
         self.errorMessage = nil
     }
     
@@ -64,14 +68,76 @@ class StorageManager: ObservableObject {
         
         self.isLoading = true
         self.errorMessage = nil
+        self.currentPath = prefix
         
         do {
             self.files = try await client.listObjects(prefix: prefix)
+            self.items = buildFileSystemItems(from: self.files, currentPath: prefix)
         } catch {
             self.errorMessage = error.localizedDescription
         }
         
         self.isLoading = false
+    }
+    
+    @MainActor
+    func navigateToFolder(_ path: String) async {
+        await loadFiles(prefix: path)
+    }
+    
+    func buildFileSystemItems(from files: [MediaFile], currentPath: String) -> [FileSystemItem] {
+        var items: [FileSystemItem] = []
+        var folderMap: [String: (fileCount: Int, totalSize: Int64)] = [:]
+        
+        // Normalize current path (ensure it ends with / if not empty)
+        let normalizedPath = currentPath.isEmpty ? "" : (currentPath.hasSuffix("/") ? currentPath : currentPath + "/")
+        
+        for file in files {
+            let key = file.key
+            
+            // Remove the current path prefix
+            guard key.hasPrefix(normalizedPath) else { continue }
+            let relativePath = String(key.dropFirst(normalizedPath.count))
+            
+            // Check if this file is in a subdirectory
+            if let slashIndex = relativePath.firstIndex(of: "/") {
+                // It's in a subfolder
+                let folderName = String(relativePath[..<slashIndex])
+                let folderPath = normalizedPath + folderName
+                
+                if var folderInfo = folderMap[folderPath] {
+                    folderInfo.fileCount += 1
+                    folderInfo.totalSize += file.size
+                    folderMap[folderPath] = folderInfo
+                } else {
+                    folderMap[folderPath] = (fileCount: 1, totalSize: file.size)
+                }
+            } else {
+                // It's a file in the current directory
+                items.append(.file(file))
+            }
+        }
+        
+        // Create folder items
+        let folderItems = folderMap.map { path, info in
+            let name = (path as NSString).lastPathComponent
+            return FileSystemItem.folder(FolderItem(
+                name: name,
+                path: path,
+                fileCount: info.fileCount,
+                totalSize: info.totalSize
+            ))
+        }.sorted { (item1: FileSystemItem, item2: FileSystemItem) in
+            item1.name.localizedCaseInsensitiveCompare(item2.name) == .orderedAscending
+        }
+        
+        // Sort file items
+        let fileItems = items.sorted { (item1: FileSystemItem, item2: FileSystemItem) in
+            item1.name.localizedCaseInsensitiveCompare(item2.name) == .orderedAscending
+        }
+        
+        // Return folders first, then files
+        return folderItems + fileItems
     }
     
     @MainActor
@@ -170,17 +236,6 @@ class StorageManager: ObservableObject {
         self.isUploading = false
     }
     
-    // Helper method to construct the storage key with path
-    private func constructKey(filename: String, destinationPath: String) -> String {
-        let trimmedPath = destinationPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        
-        if trimmedPath.isEmpty {
-            return filename
-        } else {
-            return "\(trimmedPath)/\(filename)"
-        }
-    }
-    
     @MainActor
     func deleteFile(_ file: MediaFile) async {
         guard let client = client else { return }
@@ -196,6 +251,17 @@ class StorageManager: ObservableObject {
         }
         
         self.isLoading = false
+    }
+    
+    // Helper method to construct the storage key with path
+    private func constructKey(filename: String, destinationPath: String) -> String {
+        let trimmedPath = destinationPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        
+        if trimmedPath.isEmpty {
+            return filename
+        } else {
+            return "\(trimmedPath)/\(filename)"
+        }
     }
     
     private func guessContentType(for filename: String) -> String {

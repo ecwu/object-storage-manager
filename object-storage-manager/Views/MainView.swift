@@ -64,29 +64,44 @@ struct MainView: View {
         return Array(tagSet).sorted()
     }
     
-    private var filteredFiles: [MediaFile] {
-        var files = storageManager.files
+    private var filteredItems: [FileSystemItem] {
+        var items = storageManager.items
         
-        // Apply filter
-        switch filterType {
-        case .all:
-            break
-        case .images:
-            files = files.filter { $0.isImage }
-        case .videos:
-            files = files.filter { $0.isVideo }
-        case .audio:
-            files = files.filter { $0.isAudio }
-        case .other:
-            files = files.filter { !$0.isMedia }
+        // Apply filter (only to files, not folders)
+        items = items.filter { item in
+            switch item {
+            case .folder:
+                return true  // Always show folders
+            case .file(let file):
+                switch filterType {
+                case .all:
+                    return true
+                case .images:
+                    return file.isImage
+                case .videos:
+                    return file.isVideo
+                case .audio:
+                    return file.isAudio
+                case .other:
+                    return !file.isMedia
+                }
+            }
         }
         
         // Apply search
         if !searchText.isEmpty {
-            files = files.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+            items = items.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
         }
         
-        return files
+        return items
+    }
+    
+    private var breadcrumbItems: [String] {
+        if storageManager.currentPath.isEmpty {
+            return []
+        }
+        let components = storageManager.currentPath.split(separator: "/").map(String.init)
+        return components
     }
     
     var body: some View {
@@ -248,7 +263,7 @@ struct MainView: View {
                     // Refresh button
                     Button(action: {
                         Task {
-                            await storageManager.loadFiles()
+                            await storageManager.loadFiles(prefix: storageManager.currentPath)
                         }
                     }) {
                         Image(systemName: "arrow.clockwise")
@@ -279,6 +294,57 @@ struct MainView: View {
                 .background(Color(NSColor.windowBackgroundColor))
                 
                 Divider()
+                
+                // Breadcrumb navigation
+                if storageManager.isConnected && !breadcrumbItems.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            Button(action: {
+                                Task {
+                                    await storageManager.navigateToFolder("")
+                                }
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "house.fill")
+                                        .font(.caption)
+                                    Text("Root")
+                                        .font(.caption)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(4)
+                            }
+                            .buttonStyle(.plain)
+                            
+                            ForEach(Array(breadcrumbItems.enumerated()), id: \.offset) { index, component in
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Button(action: {
+                                    let path = breadcrumbItems[0...index].joined(separator: "/")
+                                    Task {
+                                        await storageManager.navigateToFolder(path)
+                                    }
+                                }) {
+                                    Text(component)
+                                        .font(.caption)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(index == breadcrumbItems.count - 1 ? Color.accentColor.opacity(0.2) : Color.gray.opacity(0.1))
+                                        .cornerRadius(4)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    }
+                    .background(Color(NSColor.controlBackgroundColor))
+                    
+                    Divider()
+                }
                 
                 // Content
                 ZStack {
@@ -324,19 +390,23 @@ struct MainView: View {
                                 }
                             }
                         }
-                    } else if filteredFiles.isEmpty {
+                    } else if filteredItems.isEmpty {
                         VStack(spacing: 16) {
-                            Image(systemName: "doc")
+                            Image(systemName: storageManager.currentPath.isEmpty ? "doc" : "folder")
                                 .font(.system(size: 48))
                                 .foregroundColor(.secondary)
                             
-                            Text(searchText.isEmpty ? "No files found" : "No matching files")
+                            Text(searchText.isEmpty ? "No items found" : "No matching items")
                                 .font(.headline)
                             
                             if !searchText.isEmpty {
                                 Button("Clear search") {
                                     searchText = ""
                                 }
+                            } else if !storageManager.currentPath.isEmpty {
+                                Text("This folder is empty")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
                             }
                         }
                     } else {
@@ -344,28 +414,49 @@ struct MainView: View {
                         ScrollView {
                             if viewMode == .grid {
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200))], spacing: 16) {
-                                    ForEach(filteredFiles) { file in
-                                        FileGridItemView(file: file, isSelected: selectedFile?.id == file.id)
-                                            .onTapGesture {
-                                                selectedFile = file
-                                            }
-                                            .contextMenu {
-                                                fileContextMenu(for: file)
-                                            }
+                                    ForEach(filteredItems) { item in
+                                        switch item {
+                                        case .folder(let folder):
+                                            FolderGridItemView(folder: folder)
+                                                .onTapGesture(count: 2) {
+                                                    Task {
+                                                        await storageManager.navigateToFolder(folder.path)
+                                                    }
+                                                }
+                                        case .file(let file):
+                                            FileGridItemView(file: file, isSelected: selectedFile?.id == file.id)
+                                                .onTapGesture {
+                                                    selectedFile = file
+                                                }
+                                                .contextMenu {
+                                                    fileContextMenu(for: file)
+                                                }
+                                        }
                                     }
                                 }
                                 .padding()
                             } else {
                                 LazyVStack(spacing: 0) {
-                                    ForEach(filteredFiles) { file in
-                                        FileListItemView(file: file, isSelected: selectedFile?.id == file.id)
-                                            .onTapGesture {
-                                                selectedFile = file
-                                            }
-                                            .contextMenu {
-                                                fileContextMenu(for: file)
-                                            }
-                                        Divider()
+                                    ForEach(filteredItems) { item in
+                                        switch item {
+                                        case .folder(let folder):
+                                            FolderListItemView(folder: folder)
+                                                .onTapGesture(count: 2) {
+                                                    Task {
+                                                        await storageManager.navigateToFolder(folder.path)
+                                                    }
+                                                }
+                                            Divider()
+                                        case .file(let file):
+                                            FileListItemView(file: file, isSelected: selectedFile?.id == file.id)
+                                                .onTapGesture {
+                                                    selectedFile = file
+                                                }
+                                                .contextMenu {
+                                                    fileContextMenu(for: file)
+                                                }
+                                            Divider()
+                                        }
                                     }
                                 }
                             }
@@ -405,7 +496,7 @@ struct MainView: View {
                             .frame(height: 12)
                     }
                     
-                    Text("\(filteredFiles.count) \(filteredFiles.count == 1 ? "item" : "items")")
+                    Text("\(filteredItems.count) \(filteredItems.count == 1 ? "item" : "items")")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .monospacedDigit()
@@ -423,7 +514,7 @@ struct MainView: View {
             switch result {
             case .success(let urls):
                 Task {
-                    // Simple upload - no path
+                    // Upload to current folder
                     var accessedURLs: [URL] = []
                     for url in urls {
                         if url.startAccessingSecurityScopedResource() {
@@ -431,7 +522,7 @@ struct MainView: View {
                         }
                     }
                     
-                    await storageManager.uploadFiles(urls: accessedURLs, destinationPath: "")
+                    await storageManager.uploadFiles(urls: accessedURLs, destinationPath: storageManager.currentPath)
                     
                     for url in accessedURLs {
                         url.stopAccessingSecurityScopedResource()
@@ -711,6 +802,101 @@ struct FileListItemView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+    }
+}
+
+struct FolderGridItemView: View {
+    let folder: FolderItem
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.accentColor.opacity(0.1))
+                    .aspectRatio(1.2, contentMode: .fit)
+                
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(.accentColor)
+            }
+            .frame(maxWidth: .infinity)
+            
+            VStack(spacing: 3) {
+                Text(folder.name)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                
+                HStack(spacing: 4) {
+                    Text("\(folder.fileCount) \(folder.fileCount == 1 ? "item" : "items")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text("•")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text(folder.formattedSize)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+        )
+    }
+}
+
+struct FolderListItemView: View {
+    let folder: FolderItem
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "folder.fill")
+                .font(.title3)
+                .foregroundColor(.accentColor)
+                .frame(width: 28)
+            
+            VStack(alignment: .leading, spacing: 3) {
+                Text(folder.name)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                
+                Text("\(folder.fileCount) \(folder.fileCount == 1 ? "item" : "items")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
+            
+            Spacer(minLength: 12)
+            
+            HStack(spacing: 16) {
+                Text(folder.formattedSize)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+                    .frame(minWidth: 60, alignment: .trailing)
+                
+                Text("—")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 80, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.clear)
     }
 }
 
