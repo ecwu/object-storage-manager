@@ -18,14 +18,14 @@ struct MainView: View {
     @State private var selectedSource: StorageSource?
     @State private var searchText = ""
     @State private var selectedFile: MediaFile?
-    @State private var showingUploadSheet = false
     @State private var showingUploadWithPathSheet = false
-    @State private var showingPathDialog = false
+    @State private var showingUploadConfirmation = false
     @State private var destinationPath = ""
     @State private var pendingUploadURLs: [URL] = []
     @State private var viewMode: ViewMode = .grid
     @State private var filterType: FilterType = .all
     @State private var selectedSourceTag: String?
+    @State private var isDragOver = false
     
     enum ViewMode: String, CaseIterable {
         case grid = "Grid"
@@ -273,21 +273,13 @@ struct MainView: View {
                     .disabled(!storageManager.isConnected || storageManager.isLoading)
                     .help("Refresh files")
                     
-                    // Upload button with menu
-                    Menu {
-                        Button(action: { showingUploadSheet = true }) {
-                            Label("Simple Upload", systemImage: "arrow.up.doc")
-                        }
-                        
-                        Button(action: { showingUploadWithPathSheet = true }) {
-                            Label("Upload with Path", systemImage: "arrow.up.doc.on.clipboard")
-                        }
-                    } label: {
-                        Label("Upload", systemImage: "arrow.up.circle")
+                    // Upload with path button
+                    Button(action: { showingUploadWithPathSheet = true }) {
+                        Label("Upload with Path", systemImage: "arrow.up.doc.on.clipboard")
                     }
-                    .menuStyle(.borderlessButton)
                     .buttonStyle(.borderedProminent)
                     .disabled(!storageManager.isConnected)
+                    .help("Upload files to a specific path")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -348,6 +340,32 @@ struct MainView: View {
                 
                 // Content
                 ZStack {
+                    // Drag and drop zone overlay
+                    if isDragOver && storageManager.isConnected {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.accentColor.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [10]))
+                            )
+                            .overlay(
+                                VStack(spacing: 16) {
+                                    Image(systemName: "arrow.down.doc.fill")
+                                        .font(.system(size: 64))
+                                        .foregroundColor(.accentColor)
+                                    Text("Drop files to upload")
+                                        .font(.title2)
+                                        .fontWeight(.semibold)
+                                    Text("Files will be uploaded to: \(storageManager.currentPath.isEmpty ? "root folder" : storageManager.currentPath)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                            )
+                            .padding()
+                            .transition(.opacity)
+                            .zIndex(1000)
+                    }
+                    
                     if !storageManager.isConnected {
                         // Not connected state
                         VStack(spacing: 16) {
@@ -464,6 +482,35 @@ struct MainView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                    guard storageManager.isConnected else { return false }
+                    
+                    Task { @MainActor in
+                        var urls: [URL] = []
+                        
+                        for provider in providers {
+                            if let url = await resolveDroppedURL(from: provider) {
+                                let started = url.startAccessingSecurityScopedResource()
+                                urls.append(url)
+                                print("Resolved drop URL: \(url.path), security scope started: \(started)")
+                            } else {
+                                print("Could not resolve URL from dropped item")
+                            }
+                        }
+                        
+                        if !urls.isEmpty {
+                            print("Resolved \(urls.count) dropped URLs")
+                            pendingUploadURLs = urls
+                            destinationPath = storageManager.currentPath
+                            showingUploadConfirmation = true
+                        } else {
+                            print("No URLs resolved from drop")
+                        }
+                    }
+                    
+                    return true
+                }
+                .animation(.easeInOut(duration: 0.2), value: isDragOver)
                 
                 // Status bar
                 HStack(spacing: 8) {
@@ -507,50 +554,35 @@ struct MainView: View {
             }
         }
         .fileImporter(
-            isPresented: $showingUploadSheet,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                Task {
-                    // Upload to current folder
-                    var accessedURLs: [URL] = []
-                    for url in urls {
-                        if url.startAccessingSecurityScopedResource() {
-                            accessedURLs.append(url)
-                        }
-                    }
-                    
-                    await storageManager.uploadFiles(urls: accessedURLs, destinationPath: storageManager.currentPath)
-                    
-                    for url in accessedURLs {
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-            case .failure(let error):
-                print("File import error: \(error.localizedDescription)")
-            }
-        }
-        .fileImporter(
             isPresented: $showingUploadWithPathSheet,
             allowedContentTypes: [.item],
             allowsMultipleSelection: true
         ) { result in
             switch result {
             case .success(let urls):
-                // Store selected files and show path dialog
-                pendingUploadURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
-                destinationPath = ""
-                showingPathDialog = true
+                // Store selected files and show confirmation sheet
+                pendingUploadURLs = urls.filter { url in
+                    let started = url.startAccessingSecurityScopedResource()
+                    if started, let size = fileSize(at: url) {
+                        print("✓ File importer URL: \(url.path) size=\(size) bytes")
+                    } else if started {
+                        print("⚠️ File importer URL: \(url.path) (size unknown)")
+                    } else {
+                        print("❌ Failed to start security-scoped access for: \(url.path)")
+                    }
+                    return started
+                }
+                destinationPath = storageManager.currentPath
+                showingUploadConfirmation = true
             case .failure(let error):
                 print("File import error: \(error.localizedDescription)")
             }
         }
-        .sheet(isPresented: $showingPathDialog) {
-            UploadPathDialog(
-                fileCount: pendingUploadURLs.count,
+        .sheet(isPresented: $showingUploadConfirmation) {
+            UploadConfirmationSheet(
+                files: $pendingUploadURLs,
                 destinationPath: $destinationPath,
+                storageManager: storageManager,
                 onUpload: {
                     Task {
                         await storageManager.uploadFiles(urls: pendingUploadURLs, destinationPath: destinationPath)
@@ -561,7 +593,7 @@ struct MainView: View {
                         }
                         pendingUploadURLs = []
                     }
-                    showingPathDialog = false
+                    showingUploadConfirmation = false
                 },
                 onCancel: {
                     // Clean up security-scoped resources
@@ -569,7 +601,7 @@ struct MainView: View {
                         url.stopAccessingSecurityScopedResource()
                     }
                     pendingUploadURLs = []
-                    showingPathDialog = false
+                    showingUploadConfirmation = false
                 }
             )
         }
@@ -595,6 +627,372 @@ struct MainView: View {
                 await storageManager.deleteFile(file)
             }
         }
+    }
+    
+}
+
+// MARK: - Upload Confirmation Sheet
+struct UploadConfirmationSheet: View {
+    @Binding var files: [URL]
+    @Binding var destinationPath: String
+    @ObservedObject var storageManager: StorageManager
+    let onUpload: () -> Void
+    let onCancel: () -> Void
+    
+    @State private var isDragOver = false
+    @State private var isEditingPath = false
+    
+    private var totalSize: Int64 {
+        files.reduce(0) { total, url in
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let fileSize = attributes[.size] as? Int64 {
+                return total + fileSize
+            }
+            return total
+        }
+    }
+    
+    private var formattedTotalSize: String {
+        ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file)
+    }
+    
+    private var fileTypeBreakdown: [(String, Int)] {
+        let grouped = Dictionary(grouping: files) { url -> String in
+            let ext = url.pathExtension.lowercased()
+            if ext.isEmpty { return "Other" }
+            
+            let imageExts = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "svg"]
+            let videoExts = ["mp4", "mov", "avi", "mkv", "webm", "m4v"]
+            let audioExts = ["mp3", "wav", "aac", "m4a", "flac", "ogg"]
+            let docExts = ["pdf", "doc", "docx", "txt", "rtf"]
+            
+            if imageExts.contains(ext) { return "Images" }
+            if videoExts.contains(ext) { return "Videos" }
+            if audioExts.contains(ext) { return "Audio" }
+            if docExts.contains(ext) { return "Documents" }
+            return "Other"
+        }
+        
+        return grouped.map { ($0.key, $0.value.count) }.sorted { $0.1 > $1.1 }
+    }
+    
+    private var displayPath: String {
+        destinationPath.isEmpty ? "/" : "/" + destinationPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            VStack(spacing: 12) {
+                HStack {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 36))
+                        .foregroundColor(.accentColor)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Upload Confirmation")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        
+                        Text("Review and confirm files before uploading")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                
+                // Destination Path Section
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Upload Destination")
+                            .font(.headline)
+                        
+                        Spacer()
+                        
+                        Button(action: { isEditingPath.toggle() }) {
+                            Label(isEditingPath ? "Done" : "Edit Path", systemImage: isEditingPath ? "checkmark" : "pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    
+                    if isEditingPath {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.fill")
+                                .foregroundColor(.accentColor)
+                            TextField("path/to/folder", text: $destinationPath)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.fill")
+                                .foregroundColor(.accentColor)
+                            Text(displayPath)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundColor(.primary)
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .cornerRadius(6)
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+                .cornerRadius(8)
+                .padding(.horizontal, 24)
+            }
+            
+            Divider()
+                .padding(.top, 16)
+            
+            // Summary Stats
+            HStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Total Files")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(files.count)")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                }
+                
+                Divider()
+                    .frame(height: 30)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Total Size")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(formattedTotalSize)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                }
+                
+                Divider()
+                    .frame(height: 30)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("File Types")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 6) {
+                        ForEach(fileTypeBreakdown.prefix(3), id: \.0) { type, count in
+                            Text("\(type): \(count)")
+                                .font(.caption)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.2))
+                                .cornerRadius(4)
+                        }
+                    }
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            
+            Divider()
+            
+            // File List with Drop Zone
+            ZStack {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(files.enumerated()), id: \.offset) { index, url in
+                            FileUploadRow(
+                                url: url,
+                                onDelete: {
+                                    url.stopAccessingSecurityScopedResource()
+                                    files.remove(at: index)
+                                }
+                            )
+                            
+                            if index < files.count - 1 {
+                                Divider()
+                                    .padding(.leading, 60)
+                            }
+                        }
+                        
+                        // Add more files prompt
+                        if !isDragOver {
+                            VStack(spacing: 12) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 32))
+                                    .foregroundColor(.secondary)
+                                
+                                Text("Drag more files here to add them")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                
+                // Drop overlay
+                if isDragOver {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.accentColor.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                        )
+                        .overlay(
+                            VStack(spacing: 12) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 48))
+                                    .foregroundColor(.accentColor)
+                                Text("Drop to add more files")
+                                    .font(.title3)
+                                    .fontWeight(.semibold)
+                            }
+                        )
+                        .padding(12)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+            .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                Task { @MainActor in
+                    var newURLs: [URL] = []
+                    
+                    for provider in providers {
+                        if let url = await resolveDroppedURL(from: provider) {
+                            let started = url.startAccessingSecurityScopedResource()
+                            newURLs.append(url)
+                            print("Resolved sheet drop URL: \(url.path), security scope started: \(started)")
+                        } else {
+                            print("Could not resolve URL from dropped item")
+                        }
+                    }
+                    
+                    files.append(contentsOf: newURLs)
+                    print("Appended \(newURLs.count) URLs via sheet drop")
+                }
+                
+                return true
+            }
+            
+            Divider()
+            
+            // Action Buttons
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Spacer()
+                
+                Button(action: onUpload) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.up.circle.fill")
+                        Text("Upload \(files.count) \(files.count == 1 ? "File" : "Files")")
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(files.isEmpty)
+            }
+            .padding(24)
+            .background(Color(NSColor.windowBackgroundColor))
+        }
+        .frame(width: 700, height: 600)
+    }
+}
+
+// MARK: - File Upload Row
+struct FileUploadRow: View {
+    let url: URL
+    let onDelete: () -> Void
+    
+    private var fileSize: String {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            if let size = attributes[.size] as? Int64 {
+                let formatted = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+                print("📊 FileUploadRow - \(url.lastPathComponent): \(size) bytes (\(formatted))")
+                return formatted
+            } else {
+                print("⚠️ FileUploadRow - \(url.lastPathComponent): size attribute not found")
+                return "Unknown"
+            }
+        } catch {
+            print("❌ FileUploadRow - \(url.lastPathComponent): Failed to get attributes - \(error.localizedDescription)")
+            return "Unknown"
+        }
+    }
+    
+    private var fileIcon: String {
+        let ext = url.pathExtension.lowercased()
+        
+        let imageExts = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "svg"]
+        let videoExts = ["mp4", "mov", "avi", "mkv", "webm", "m4v"]
+        let audioExts = ["mp3", "wav", "aac", "m4a", "flac", "ogg"]
+        let docExts = ["pdf", "doc", "docx", "txt", "rtf"]
+        
+        if imageExts.contains(ext) { return "photo" }
+        if videoExts.contains(ext) { return "video" }
+        if audioExts.contains(ext) { return "music.note" }
+        if docExts.contains(ext) { return "doc" }
+        return "doc.fill"
+    }
+    
+    private var fileType: String {
+        let ext = url.pathExtension.lowercased()
+        return ext.isEmpty ? "File" : ext.uppercased()
+    }
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: fileIcon)
+                .font(.title2)
+                .foregroundColor(.accentColor)
+                .frame(width: 36)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(url.lastPathComponent)
+                    .font(.body)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                
+                HStack(spacing: 8) {
+                    Text(fileSize)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Text("•")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Text(fileType)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+            
+            Button(action: onDelete) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove file")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 }
 
@@ -902,4 +1300,133 @@ struct FolderListItemView: View {
 
 #Preview {
     MainView()
+}
+
+// MARK: - Helpers
+/// Resolve an `NSItemProvider` from Finder drag/drop into a usable file URL.
+fileprivate func resolveDroppedURL(from provider: NSItemProvider) async -> URL? {
+    print("Provider identifiers: \(provider.registeredTypeIdentifiers)")
+    
+    // METHOD 1: Load item and convert data representation to URL
+    // CRITICAL: When using UTType.fileURL, loadItem returns DATA REPRESENTATION of URL, not the URL itself!
+    // This gives us the actual original file URL with proper security-scoped access
+    if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+        do {
+            let data = try await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier)
+            
+            // The data is actually Data type containing the URL representation
+            if let urlData = data as? Data,
+               let url = URL(dataRepresentation: urlData, relativeTo: nil) {
+                if let size = fileSize(at: url) {
+                    print("✓ Method 1 (data representation): \(url.path) size=\(size) bytes")
+                } else {
+                    print("✓ Method 1 (data representation): \(url.path) (size unknown)")
+                }
+                return url
+            }
+            
+            // Fallback: try direct URL cast (for other content types)
+            if let url = data as? URL {
+                if let size = fileSize(at: url) {
+                    print("✓ Method 1 (direct cast): \(url.path) size=\(size) bytes")
+                } else {
+                    print("✓ Method 1 (direct cast): \(url.path) (size unknown)")
+                }
+                return url
+            }
+            
+            print("⚠️ Method 1: Loaded data but couldn't convert to URL. Data type: \(type(of: data))")
+        } catch {
+            print("❌ Method 1 failed: \(error.localizedDescription)")
+        }
+    }
+    
+    // METHOD 2: Copy file representation (this creates a stable copy we can access later)
+    // Use this if data representation method fails
+    if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+        print("⚠️ Method 2: Using file representation copy")
+        if let copied = await copyFileRepresentation(from: provider, suggestedName: provider.suggestedName) {
+            return copied
+        }
+    }
+    
+    // METHOD 3: Try in-place access (NOTE: This gives temporary URLs that may not persist!)
+    // Only use as last resort
+    if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+        print("⚠️ Method 3: Trying in-place file representation")
+        if let url = await withCheckedContinuation({ continuation in
+            provider.loadInPlaceFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { url, _, error in
+                if let error {
+                    print("loadInPlaceFileRepresentation error: \(error.localizedDescription)")
+                }
+                if let url {
+                    if let size = fileSize(at: url) {
+                        print("✓ Method 3 (in-place): \(url.path) size=\(size) bytes")
+                    } else {
+                        print("✓ Method 3 (in-place): \(url.path) (size unknown)")
+                    }
+                }
+                continuation.resume(returning: url)
+            }
+        }) {
+            return url
+        }
+    }
+    
+    print("❌ Failed to resolve URL from provider")
+    return nil
+}
+
+// Copy the provider’s file representation to a stable temp file we control.
+fileprivate func copyFileRepresentation(from provider: NSItemProvider, suggestedName: String?) async -> URL? {
+    await withCheckedContinuation { continuation in
+        provider.loadFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { url, error in
+            if let error {
+                print("❌ loadFileRepresentation error: \(error.localizedDescription)")
+                continuation.resume(returning: nil)
+                return
+            }
+            
+            guard let sourceURL = url else {
+                print("❌ No source URL from loadFileRepresentation")
+                continuation.resume(returning: nil)
+                return
+            }
+            
+            // Get source file size for verification
+            let sourceSize = fileSize(at: sourceURL)
+            print("Source file: \(sourceURL.path) size=\(sourceSize ?? -1) bytes")
+            
+            let name = suggestedName ?? sourceURL.lastPathComponent
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "_" + name)
+            
+            do {
+                // Copy the file to a stable temp location
+                try FileManager.default.copyItem(at: sourceURL, to: destination)
+                
+                // Verify the copy
+                if let destSize = fileSize(at: destination) {
+                    if let srcSize = sourceSize, destSize != srcSize {
+                        print("⚠️ Warning: Copied file size (\(destSize)) differs from source (\(srcSize))")
+                    }
+                    print("✓ Copied file representation to temp: \(destination.path) size=\(destSize) bytes")
+                } else {
+                    print("⚠️ Copied file but size unknown: \(destination.path)")
+                }
+                continuation.resume(returning: destination)
+            } catch {
+                print("❌ Failed to copy file representation: \(error.localizedDescription)")
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+}
+
+fileprivate func fileSize(at url: URL) -> Int64? {
+    if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+       let size = attrs[.size] as? NSNumber {
+        return size.int64Value
+    }
+    return nil
 }

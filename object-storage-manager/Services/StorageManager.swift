@@ -182,26 +182,93 @@ class StorageManager: ObservableObject {
         let totalFiles = urls.count
         var uploadedFiles = 0
         
+        print("\n📤 Starting upload of \(totalFiles) file(s) to destination: '\(destinationPath)'")
+        
         for url in urls {
             do {
-                let data = try Data(contentsOf: url)
-                let filename = url.lastPathComponent
+                print("\n📄 Processing: \(url.lastPathComponent)")
+                print("   URL: \(url)")
+                print("   Path: \(url.path)")
+                print("   Is file URL: \(url.isFileURL)")
+                
+                // For file-reference URLs, try to resolve to standard file URL
+                var fileURL = url
+                if url.scheme == "file-reference" {
+                    print("   ⚠️ Detected file-reference URL, attempting to resolve...")
+                    do {
+                        let bookmarkData = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+                        var isStale = false
+                        let resolvedURL = try URL(resolvingBookmarkData: bookmarkData, bookmarkDataIsStale: &isStale)
+                        fileURL = resolvedURL
+                        print("   ✓ Resolved to: \(fileURL.path) (stale: \(isStale))")
+                    } catch {
+                        print("   ❌ Failed to resolve file-reference URL: \(error.localizedDescription)")
+                    }
+                }
+                
+                // Check if file exists and is accessible
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    throw NSError(domain: "StorageManager", code: -1, 
+                                userInfo: [NSLocalizedDescriptionKey: "File does not exist at path: \(fileURL.path)"])
+                }
+                
+                // Check if file is readable
+                guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
+                    throw NSError(domain: "StorageManager", code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "File is not readable at path: \(fileURL.path)"])
+                }
+                
+                // Get file attributes before reading
+                let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+                let fileSize = attributes[.size] as? Int64 ?? 0
+                let fileType = attributes[.type] as? FileAttributeType
+                print("   File size on disk: \(fileSize) bytes")
+                print("   File type: \(String(describing: fileType))")
+                
+                // Try to read file data with error handling
+                let data: Data
+                do {
+                    data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+                    print("   ✓ Data loaded: \(data.count) bytes")
+                } catch let readError {
+                    print("   ❌ Failed to read file data: \(readError.localizedDescription)")
+                    print("   Retrying with uncached read...")
+                    data = try Data(contentsOf: fileURL, options: .uncached)
+                    print("   ✓ Data loaded (uncached): \(data.count) bytes")
+                }
+                
+                if data.count != fileSize {
+                    print("   ⚠️ Warning: Data size (\(data.count)) differs from file size (\(fileSize))")
+                }
+                
+                guard !data.isEmpty else {
+                    throw NSError(domain: "StorageManager", code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "File data is empty - file size is \(fileSize) bytes"])
+                }
+                
+                let filename = fileURL.lastPathComponent
                 let contentType = guessContentType(for: filename)
                 
                 // Construct the full key with optional path
                 let key = constructKey(filename: filename, destinationPath: destinationPath)
+                print("   Upload key: \(key)")
+                print("   Content type: \(contentType)")
                 
                 try await client.uploadObject(key: key, data: data, contentType: contentType)
                 
                 uploadedFiles += 1
                 self.uploadProgress = Double(uploadedFiles) / Double(totalFiles)
+                print("   ✓ Upload successful (\(uploadedFiles)/\(totalFiles))")
             } catch {
-                self.errorMessage = "Failed to upload \(url.lastPathComponent): \(error.localizedDescription)"
+                let errorMsg = "Failed to upload \(url.lastPathComponent): \(error.localizedDescription)"
+                print("   ❌ \(errorMsg)")
+                self.errorMessage = errorMsg
                 // Continue with other files even if one fails
             }
         }
         
         self.uploadProgress = 1.0
+        print("\n✅ Upload batch complete: \(uploadedFiles)/\(totalFiles) successful\n")
         await loadFiles()
         self.isUploading = false
     }
