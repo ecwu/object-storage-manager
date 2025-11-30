@@ -182,27 +182,18 @@ class StorageManager: ObservableObject {
         let totalFiles = urls.count
         var uploadedFiles = 0
         
-        print("\n📤 Starting upload of \(totalFiles) file(s) to destination: '\(destinationPath)'")
-        
         for url in urls {
             do {
-                print("\n📄 Processing: \(url.lastPathComponent)")
-                print("   URL: \(url)")
-                print("   Path: \(url.path)")
-                print("   Is file URL: \(url.isFileURL)")
-                
                 // For file-reference URLs, try to resolve to standard file URL
                 var fileURL = url
                 if url.scheme == "file-reference" {
-                    print("   ⚠️ Detected file-reference URL, attempting to resolve...")
                     do {
                         let bookmarkData = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
                         var isStale = false
                         let resolvedURL = try URL(resolvingBookmarkData: bookmarkData, bookmarkDataIsStale: &isStale)
                         fileURL = resolvedURL
-                        print("   ✓ Resolved to: \(fileURL.path) (stale: \(isStale))")
                     } catch {
-                        print("   ❌ Failed to resolve file-reference URL: \(error.localizedDescription)")
+                        // Use original URL if resolution fails
                     }
                 }
                 
@@ -218,32 +209,17 @@ class StorageManager: ObservableObject {
                                 userInfo: [NSLocalizedDescriptionKey: "File is not readable at path: \(fileURL.path)"])
                 }
                 
-                // Get file attributes before reading
-                let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-                let fileSize = attributes[.size] as? Int64 ?? 0
-                let fileType = attributes[.type] as? FileAttributeType
-                print("   File size on disk: \(fileSize) bytes")
-                print("   File type: \(String(describing: fileType))")
-                
                 // Try to read file data with error handling
                 let data: Data
                 do {
                     data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-                    print("   ✓ Data loaded: \(data.count) bytes")
-                } catch let readError {
-                    print("   ❌ Failed to read file data: \(readError.localizedDescription)")
-                    print("   Retrying with uncached read...")
+                } catch {
                     data = try Data(contentsOf: fileURL, options: .uncached)
-                    print("   ✓ Data loaded (uncached): \(data.count) bytes")
-                }
-                
-                if data.count != fileSize {
-                    print("   ⚠️ Warning: Data size (\(data.count)) differs from file size (\(fileSize))")
                 }
                 
                 guard !data.isEmpty else {
                     throw NSError(domain: "StorageManager", code: -1,
-                                userInfo: [NSLocalizedDescriptionKey: "File data is empty - file size is \(fileSize) bytes"])
+                                userInfo: [NSLocalizedDescriptionKey: "File data is empty"])
                 }
                 
                 let filename = fileURL.lastPathComponent
@@ -251,24 +227,18 @@ class StorageManager: ObservableObject {
                 
                 // Construct the full key with optional path
                 let key = constructKey(filename: filename, destinationPath: destinationPath)
-                print("   Upload key: \(key)")
-                print("   Content type: \(contentType)")
                 
                 try await client.uploadObject(key: key, data: data, contentType: contentType)
                 
                 uploadedFiles += 1
                 self.uploadProgress = Double(uploadedFiles) / Double(totalFiles)
-                print("   ✓ Upload successful (\(uploadedFiles)/\(totalFiles))")
             } catch {
-                let errorMsg = "Failed to upload \(url.lastPathComponent): \(error.localizedDescription)"
-                print("   ❌ \(errorMsg)")
-                self.errorMessage = errorMsg
+                self.errorMessage = "Failed to upload \(url.lastPathComponent): \(error.localizedDescription)"
                 // Continue with other files even if one fails
             }
         }
         
         self.uploadProgress = 1.0
-        print("\n✅ Upload batch complete: \(uploadedFiles)/\(totalFiles) successful\n")
         await loadFiles()
         self.isUploading = false
     }

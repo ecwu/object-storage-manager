@@ -490,21 +490,15 @@ struct MainView: View {
                         
                         for provider in providers {
                             if let url = await resolveDroppedURL(from: provider) {
-                                let started = url.startAccessingSecurityScopedResource()
+                                _ = url.startAccessingSecurityScopedResource()
                                 urls.append(url)
-                                print("Resolved drop URL: \(url.path), security scope started: \(started)")
-                            } else {
-                                print("Could not resolve URL from dropped item")
                             }
                         }
                         
                         if !urls.isEmpty {
-                            print("Resolved \(urls.count) dropped URLs")
                             pendingUploadURLs = urls
                             destinationPath = storageManager.currentPath
                             showingUploadConfirmation = true
-                        } else {
-                            print("No URLs resolved from drop")
                         }
                     }
                     
@@ -561,21 +555,11 @@ struct MainView: View {
             switch result {
             case .success(let urls):
                 // Store selected files and show confirmation sheet
-                pendingUploadURLs = urls.filter { url in
-                    let started = url.startAccessingSecurityScopedResource()
-                    if started, let size = fileSize(at: url) {
-                        print("✓ File importer URL: \(url.path) size=\(size) bytes")
-                    } else if started {
-                        print("⚠️ File importer URL: \(url.path) (size unknown)")
-                    } else {
-                        print("❌ Failed to start security-scoped access for: \(url.path)")
-                    }
-                    return started
-                }
+                pendingUploadURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
                 destinationPath = storageManager.currentPath
                 showingUploadConfirmation = true
-            case .failure(let error):
-                print("File import error: \(error.localizedDescription)")
+            case .failure:
+                break
             }
         }
         .sheet(isPresented: $showingUploadConfirmation) {
@@ -867,16 +851,12 @@ struct UploadConfirmationSheet: View {
                     
                     for provider in providers {
                         if let url = await resolveDroppedURL(from: provider) {
-                            let started = url.startAccessingSecurityScopedResource()
+                            _ = url.startAccessingSecurityScopedResource()
                             newURLs.append(url)
-                            print("Resolved sheet drop URL: \(url.path), security scope started: \(started)")
-                        } else {
-                            print("Could not resolve URL from dropped item")
                         }
                     }
                     
                     files.append(contentsOf: newURLs)
-                    print("Appended \(newURLs.count) URLs via sheet drop")
                 }
                 
                 return true
@@ -916,20 +896,11 @@ struct FileUploadRow: View {
     let onDelete: () -> Void
     
     private var fileSize: String {
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            if let size = attributes[.size] as? Int64 {
-                let formatted = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
-                print("📊 FileUploadRow - \(url.lastPathComponent): \(size) bytes (\(formatted))")
-                return formatted
-            } else {
-                print("⚠️ FileUploadRow - \(url.lastPathComponent): size attribute not found")
-                return "Unknown"
-            }
-        } catch {
-            print("❌ FileUploadRow - \(url.lastPathComponent): Failed to get attributes - \(error.localizedDescription)")
-            return "Unknown"
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? Int64 {
+            return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
         }
+        return "Unknown"
     }
     
     private var fileIcon: String {
@@ -1305,8 +1276,6 @@ struct FolderListItemView: View {
 // MARK: - Helpers
 /// Resolve an `NSItemProvider` from Finder drag/drop into a usable file URL.
 fileprivate func resolveDroppedURL(from provider: NSItemProvider) async -> URL? {
-    print("Provider identifiers: \(provider.registeredTypeIdentifiers)")
-    
     // METHOD 1: Load item and convert data representation to URL
     // CRITICAL: When using UTType.fileURL, loadItem returns DATA REPRESENTATION of URL, not the URL itself!
     // This gives us the actual original file URL with proper security-scoped access
@@ -1317,34 +1286,21 @@ fileprivate func resolveDroppedURL(from provider: NSItemProvider) async -> URL? 
             // The data is actually Data type containing the URL representation
             if let urlData = data as? Data,
                let url = URL(dataRepresentation: urlData, relativeTo: nil) {
-                if let size = fileSize(at: url) {
-                    print("✓ Method 1 (data representation): \(url.path) size=\(size) bytes")
-                } else {
-                    print("✓ Method 1 (data representation): \(url.path) (size unknown)")
-                }
                 return url
             }
             
             // Fallback: try direct URL cast (for other content types)
             if let url = data as? URL {
-                if let size = fileSize(at: url) {
-                    print("✓ Method 1 (direct cast): \(url.path) size=\(size) bytes")
-                } else {
-                    print("✓ Method 1 (direct cast): \(url.path) (size unknown)")
-                }
                 return url
             }
-            
-            print("⚠️ Method 1: Loaded data but couldn't convert to URL. Data type: \(type(of: data))")
         } catch {
-            print("❌ Method 1 failed: \(error.localizedDescription)")
+            // Silent fail, try next method
         }
     }
     
     // METHOD 2: Copy file representation (this creates a stable copy we can access later)
     // Use this if data representation method fails
     if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-        print("⚠️ Method 2: Using file representation copy")
         if let copied = await copyFileRepresentation(from: provider, suggestedName: provider.suggestedName) {
             return copied
         }
@@ -1353,19 +1309,8 @@ fileprivate func resolveDroppedURL(from provider: NSItemProvider) async -> URL? 
     // METHOD 3: Try in-place access (NOTE: This gives temporary URLs that may not persist!)
     // Only use as last resort
     if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-        print("⚠️ Method 3: Trying in-place file representation")
         if let url = await withCheckedContinuation({ continuation in
             provider.loadInPlaceFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { url, _, error in
-                if let error {
-                    print("loadInPlaceFileRepresentation error: \(error.localizedDescription)")
-                }
-                if let url {
-                    if let size = fileSize(at: url) {
-                        print("✓ Method 3 (in-place): \(url.path) size=\(size) bytes")
-                    } else {
-                        print("✓ Method 3 (in-place): \(url.path) (size unknown)")
-                    }
-                }
                 continuation.resume(returning: url)
             }
         }) {
@@ -1373,7 +1318,6 @@ fileprivate func resolveDroppedURL(from provider: NSItemProvider) async -> URL? 
         }
     }
     
-    print("❌ Failed to resolve URL from provider")
     return nil
 }
 
