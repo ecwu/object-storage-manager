@@ -78,6 +78,10 @@ struct SettingsView: View {
                                     selectedSource = source
                                 }
                                 
+                                Button("Duplicate") {
+                                    duplicateSource(source)
+                                }
+                                
                                 Divider()
                                 
                                 Button("Delete", role: .destructive) {
@@ -122,6 +126,63 @@ struct SettingsView: View {
         withAnimation {
             CredentialsStore().delete(for: source.credentialsRef)
             modelContext.delete(source)
+        }
+    }
+    
+    private func duplicateSource(_ source: StorageSource) {
+        let credentialsStore = CredentialsStore()
+        
+        // Generate unique name
+        var newName = "\(source.name) Copy"
+        var counter = 1
+        while sources.contains(where: { $0.name == newName }) {
+            counter += 1
+            newName = "\(source.name) Copy \(counter)"
+        }
+        
+        // Create new credentials reference with new UUID
+        let newId = UUID()
+        let newCredentialsRef = newId.uuidString
+        
+        // Copy credentials from the original source
+        if let originalCredentials = try? credentialsStore.load(for: source.credentialsRef) {
+            try? credentialsStore.save(credentials: originalCredentials, for: newCredentialsRef)
+        }
+        
+        // Copy tags
+        let copiedTags = source.tags.map { tag in
+            let tagName = tag.name
+            let descriptor = FetchDescriptor<Tag>(predicate: #Predicate<Tag> { $0.name == tagName })
+            if let existing = try? modelContext.fetch(descriptor).first {
+                return existing
+            } else {
+                let newTag = Tag(name: tag.name)
+                modelContext.insert(newTag)
+                return newTag
+            }
+        }
+        
+        // Create duplicated source
+        let duplicatedSource = StorageSource(
+            id: newId,
+            name: newName,
+            providerType: source.providerType,
+            endpoint: source.endpoint,
+            bucket: source.bucket,
+            region: source.region,
+            useSSL: source.useSSL,
+            pathStyleEnabled: source.pathStyleEnabled,
+            note: source.note,
+            createdAt: Date(),
+            lastUsedAt: nil,
+            lastCheck: nil,
+            lastError: nil,
+            credentialsRef: newCredentialsRef,
+            tags: copiedTags
+        )
+        
+        withAnimation {
+            modelContext.insert(duplicatedSource)
         }
     }
 }
