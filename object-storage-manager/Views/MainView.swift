@@ -1071,7 +1071,7 @@ struct FileGridItemView: View {
                     .fill(Color(NSColor.controlBackgroundColor))
                     .aspectRatio(1.2, contentMode: .fit)
                 
-                if file.isImage, let url = file.url {
+                if file.isImage, file.canPreview, let url = file.url {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .empty:
@@ -1079,7 +1079,7 @@ struct FileGridItemView: View {
                         case .success(let image):
                             image
                                 .resizable()
-                                .aspectRatio(contentMode: .fill)
+                                .scaledToFill()
                         case .failure:
                             Image(systemName: file.iconName)
                                 .font(.largeTitle)
@@ -1092,7 +1092,16 @@ struct FileGridItemView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
-                    .cornerRadius(8)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else if file.isImage && !file.canPreview {
+                    VStack(spacing: 8) {
+                        Image(systemName: file.iconName)
+                            .font(.system(size: 36))
+                            .foregroundColor(.secondary)
+                        Text("Too large")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 } else {
                     Image(systemName: file.iconName)
                         .font(.system(size: 36))

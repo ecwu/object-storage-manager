@@ -268,6 +268,7 @@ struct SourceFormView: View {
     @State private var tags: [String] = []
     @State private var pathStyleEnabled: Bool = false
     @State private var note: String = ""
+    @State private var cdnUrl: String = ""
     
     @State private var isTesting = false
     @State private var testResult: TestResult?
@@ -339,6 +340,9 @@ struct SourceFormView: View {
                     TextField("Endpoint", text: $endpoint)
                         .textContentType(.URL)
                     
+                    TextField("CDN URL (optional)", text: $cdnUrl)
+                        .textContentType(.URL)
+                    
                     TextField("Region (optional)", text: $region)
                     
                     Toggle("Use SSL (HTTPS)", isOn: $useSSL)
@@ -403,6 +407,7 @@ struct SourceFormView: View {
                 useSSL = source.useSSL
                 pathStyleEnabled = source.pathStyleEnabled
                 note = source.note ?? ""
+                cdnUrl = source.cdnUrl ?? ""
                 tags = source.tags.map { $0.name }
                 
                 if let creds = try? credentialsStore.load(for: source.credentialsRef) {
@@ -464,6 +469,7 @@ struct SourceFormView: View {
             source.useSSL = useSSL
             source.pathStyleEnabled = pathStyleEnabled
             source.note = note.isEmpty ? nil : note
+            source.cdnUrl = cdnUrl.isEmpty ? nil : cdnUrl
             source.tags = resolvedTags
             if source.lastUsedAt == nil { source.lastUsedAt = Date() }
             try? credentialsStore.save(credentials: credentials, for: source.credentialsRef)
@@ -480,6 +486,7 @@ struct SourceFormView: View {
                 useSSL: useSSL,
                 pathStyleEnabled: pathStyleEnabled,
                 note: note.isEmpty ? nil : note,
+                cdnUrl: cdnUrl.isEmpty ? nil : cdnUrl,
                 createdAt: Date(),
                 lastUsedAt: Date(),
                 credentialsRef: credentialsRef,

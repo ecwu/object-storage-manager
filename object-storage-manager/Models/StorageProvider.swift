@@ -73,6 +73,7 @@ final class StorageSource {
     var useSSL: Bool
     var pathStyleEnabled: Bool
     var note: String?
+    var cdnUrl: String?
     var createdAt: Date
     var lastUsedAt: Date?
     var lastCheck: Date?
@@ -96,6 +97,7 @@ final class StorageSource {
         useSSL: Bool = true,
         pathStyleEnabled: Bool = false,
         note: String? = nil,
+        cdnUrl: String? = nil,
         createdAt: Date = Date(),
         lastUsedAt: Date? = nil,
         lastCheck: Date? = nil,
@@ -112,6 +114,7 @@ final class StorageSource {
         self.useSSL = useSSL
         self.pathStyleEnabled = pathStyleEnabled
         self.note = note
+        self.cdnUrl = cdnUrl
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
         self.lastCheck = lastCheck

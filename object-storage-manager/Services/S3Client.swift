@@ -250,6 +250,14 @@ class S3Client {
     
     func getObjectURL(key: String) -> URL? {
         let encodedKey = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
+        
+        // Use CDN URL if available, otherwise use S3 URL
+        if let cdnUrl = source.cdnUrl, !cdnUrl.isEmpty {
+            // Ensure CDN URL doesn't end with a slash
+            let cleanCdnUrl = cdnUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return URL(string: "\(cleanCdnUrl)/\(encodedKey)")
+        }
+        
         return URL(string: "\(baseURL)\(bucketPrefix)/\(encodedKey)")
     }
     

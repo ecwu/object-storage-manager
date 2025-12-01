@@ -52,4 +52,9 @@ struct MediaFile: Identifiable, Hashable {
         if isAudio { return "music.note" }
         return "doc"
     }
+    
+    /// Check if file is small enough to preview (under 1MB)
+    var canPreview: Bool {
+        return size < 1_048_576 // 1MB in bytes
+    }
 }
