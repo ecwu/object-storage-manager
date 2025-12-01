@@ -18,7 +18,6 @@ struct MainView: View {
     @State private var selectedSource: StorageSource?
     @State private var searchText = ""
     @State private var selectedFile: MediaFile?
-    @State private var showingUploadWithPathSheet = false
     @State private var showingUploadConfirmation = false
     @State private var destinationPath = ""
     @State private var pendingUploadURLs: [URL] = []
@@ -274,7 +273,11 @@ struct MainView: View {
                     .help("Refresh files")
                     
                     // Upload with path button
-                    Button(action: { showingUploadWithPathSheet = true }) {
+                    Button(action: {
+                        pendingUploadURLs = []
+                        destinationPath = storageManager.currentPath
+                        showingUploadConfirmation = true
+                    }) {
                         Label("Upload with Path", systemImage: "arrow.up.doc.on.clipboard")
                     }
                     .buttonStyle(.borderedProminent)
@@ -547,21 +550,6 @@ struct MainView: View {
                 .background(Color(NSColor.controlBackgroundColor))
             }
         }
-        .fileImporter(
-            isPresented: $showingUploadWithPathSheet,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                // Store selected files and show confirmation sheet
-                pendingUploadURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
-                destinationPath = storageManager.currentPath
-                showingUploadConfirmation = true
-            case .failure:
-                break
-            }
-        }
         .sheet(isPresented: $showingUploadConfirmation) {
             UploadConfirmationSheet(
                 files: $pendingUploadURLs,
@@ -625,6 +613,7 @@ struct UploadConfirmationSheet: View {
     
     @State private var isDragOver = false
     @State private var isEditingPath = false
+    @State private var showingFileImporter = false
     
     private var totalSize: Int64 {
         files.reduce(0) { total, url in
@@ -804,19 +793,46 @@ struct UploadConfirmationSheet: View {
                             }
                         }
                         
-                        // Add more files prompt
+                        // Add files prompt - enhanced for empty state
                         if !isDragOver {
-                            VStack(spacing: 12) {
-                                Image(systemName: "plus.circle.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.secondary)
-                                
-                                Text("Drag more files here to add them")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                            VStack(spacing: 16) {
+                                if files.isEmpty {
+                                    VStack(spacing: 16) {
+                                        Image(systemName: "arrow.up.doc.fill")
+                                            .font(.system(size: 48))
+                                            .foregroundColor(.accentColor)
+
+                                        Text("No files selected yet")
+                                            .font(.headline)
+                                            .fontWeight(.medium)
+
+                                        Text("Drag and drop files here or use the file browser to add files to upload")
+                                            .font(.body)
+                                            .foregroundColor(.secondary)
+                                            .multilineTextAlignment(.center)
+                                            .padding(.horizontal, 20)
+
+                                        Button("Browse Files") {
+                                            showingFileImporter = true
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 60)
+                                } else {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "plus.circle.fill")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(.secondary)
+
+                                        Text("Drag more files here to add them")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 40)
+                                }
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
                         }
                     }
                     .padding(.vertical, 8)
@@ -887,6 +903,19 @@ struct UploadConfirmationSheet: View {
             .background(Color(NSColor.windowBackgroundColor))
         }
         .frame(width: 700, height: 600)
+        .fileImporter(
+            isPresented: $showingFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                let validURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
+                files.append(contentsOf: validURLs)
+            case .failure:
+                break
+            }
+        }
     }
 }
 
