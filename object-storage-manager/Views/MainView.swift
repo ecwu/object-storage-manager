@@ -1079,7 +1079,7 @@ struct FileGridItemView: View {
                         case .success(let image):
                             image
                                 .resizable()
-                                .scaledToFill()
+                                .scaledToFit()
                         case .failure:
                             Image(systemName: file.iconName)
                                 .font(.largeTitle)
